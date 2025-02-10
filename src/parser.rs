@@ -6,13 +6,16 @@ use std::str;
 
 use nom::{
     branch::{alt, permutation},
-    bytes::complete::{tag, take_till, take_while, take_while1},
+    bytes::{
+        complete::{tag, take_till, take_while, take_while1},
+        is_not,
+    },
     character::complete::{self, char, line_ending, multispace0, space0, space1},
     combinator::{map, opt, value},
     error::{ErrorKind, ParseError},
-    multi::{many0, many_till, separated_list0},
+    multi::{fold, many0, many_till, separated_list0},
     number::complete::double,
-    sequence::preceded,
+    sequence::{delimited, pair, preceded},
     AsChar, IResult, Input, Parser,
 };
 
@@ -149,10 +152,10 @@ mod tests {
 
     #[test]
     fn node_comment_test() {
-        let def1 = "CM_ BU_ network_node \"Some network node comment\";\n";
+        let def1 = "CM_ BU_ network_node \"Some network \\\"node\\\" comment\";\n";
         let comment1 = Comment::Node {
             node_name: "network_node".to_string(),
-            comment: "Some network node comment".to_string(),
+            comment: "Some network \"node\" comment".to_string(),
         };
         let (_, comment1_def) = comment(def1).expect("Failed to parse node comment definition");
         assert_eq!(comment1, comment1_def);
@@ -601,10 +604,6 @@ fn is_c_ident_head(chr: char) -> bool {
     chr.is_alphabetic() || chr == '_'
 }
 
-fn is_quote(chr: char) -> bool {
-    chr == '"'
-}
-
 /// Multispace zero or more
 fn ms0<T, E: ParseError<T>>(input: T) -> IResult<T, T, E>
 where
@@ -647,11 +646,6 @@ fn semi_colon(s: &str) -> IResult<&str, char> {
     char(';').parse(s)
 }
 
-/// Quote aka '"'
-fn quote(s: &str) -> IResult<&str, char> {
-    char('"').parse(s)
-}
-
 /// Pipe character
 fn pipe(s: &str) -> IResult<&str, char> {
     char('|').parse(s)
@@ -682,6 +676,20 @@ fn brk_close(s: &str) -> IResult<&str, char> {
     char(']').parse(s)
 }
 
+fn c_like_comment(s: &str) -> IResult<&str, ()> {
+    value((), pair(tag("//"), is_not("\n\r"))).parse(s)
+}
+
+/// End of line sequence containing an optional c-like comment.
+fn eol(s: &str) -> IResult<&str, ()> {
+    // optional whitespace followed by an optional comment followed by a newline
+    value((), (space0, opt(c_like_comment), line_ending)).parse(s)
+}
+
+fn empty_line(s: &str) -> IResult<&str, ()> {
+    value((), eol).parse(s)
+}
+
 /// A valid C_identifier. C_identifiers start with a  alphacharacter or an underscore
 /// and may further consist of alpha­numeric, characters and underscore
 fn c_ident(s: &str) -> IResult<&str, String> {
@@ -694,11 +702,32 @@ fn c_ident_vec(s: &str) -> IResult<&str, Vec<String>> {
     separated_list0(comma, c_ident).parse(s)
 }
 
-fn char_string(s: &str) -> IResult<&str, &str> {
-    let (s, _) = quote(s)?;
-    let (s, char_string_value) = take_till(is_quote).parse(s)?;
-    let (s, _) = quote(s)?;
-    Ok((s, char_string_value))
+fn char_string(s: &str) -> IResult<&str, String> {
+    const ESCAPED_QUOTE: &str = "\\\"";
+
+    enum StringFragment<'a> {
+        Literal(&'a str),
+        EscapedQuote,
+        LiteralBackslash,
+    }
+
+    let string_fragment = alt((
+        map(is_not(ESCAPED_QUOTE), StringFragment::Literal),
+        map(tag(ESCAPED_QUOTE), |_| StringFragment::EscapedQuote),
+        // if \ is not followed by a quote, it is a literal backslash
+        map(char('\\'), |_| StringFragment::LiteralBackslash),
+    ));
+
+    let build_string = fold(0.., string_fragment, String::new, |mut acc, fragment| {
+        match fragment {
+            StringFragment::Literal(s) => acc.push_str(s),
+            StringFragment::EscapedQuote => acc.push('"'),
+            StringFragment::LiteralBackslash => acc.push('\\'),
+        }
+        acc
+    });
+
+    delimited(char('"'), build_string, char('"')).parse(s)
 }
 
 fn little_endian(s: &str) -> IResult<&str, ByteOrder> {
@@ -773,7 +802,7 @@ fn version(s: &str) -> IResult<&str, Version> {
     let (s, _) = tag("VERSION").parse(s)?;
     let (s, _) = ms1(s)?;
     let (s, v) = char_string(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, Version(v.to_string())))
 }
 
@@ -818,7 +847,7 @@ fn signal(s: &str) -> IResult<&str, Signal> {
     let (s, unit) = char_string(s)?;
     let (s, _) = ms1(s)?;
     let (s, receivers) = c_ident_vec(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         Signal {
@@ -971,7 +1000,7 @@ fn comment(s: &str) -> IResult<&str, Comment> {
     ))
     .parse(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, comment))
 }
 
@@ -1032,7 +1061,7 @@ fn value_description_for_env_var(s: &str) -> IResult<&str, ValueDescription> {
 fn value_descriptions(s: &str) -> IResult<&str, ValueDescription> {
     let (s, _) = multispace0(s)?;
     let (s, vd) = alt((value_description_for_signal, value_description_for_env_var)).parse(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, vd))
 }
 
@@ -1117,7 +1146,7 @@ fn environment_variable(s: &str) -> IResult<&str, EnvironmentVariable> {
     let (s, _) = ms1(s)?;
     let (s, access_nodes) = separated_list0(comma, access_node).parse(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         EnvironmentVariable {
@@ -1143,7 +1172,7 @@ fn environment_variable_data(s: &str) -> IResult<&str, EnvironmentVariableData> 
     let (s, _) = ms1(s)?;
     let (s, data_size) = complete::u64(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         EnvironmentVariableData {
@@ -1183,7 +1212,7 @@ fn signal_type(s: &str) -> IResult<&str, SignalType> {
     let (s, _) = ms1(s)?;
     let (s, value_table) = c_ident(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         SignalType {
@@ -1306,7 +1335,7 @@ fn attribute_value_for_object(s: &str) -> IResult<&str, AttributeValueForObject>
     ))
     .parse(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         AttributeValueForObject {
@@ -1397,7 +1426,7 @@ fn node(s: &str) -> IResult<&str, Node> {
     let (s, _) = tag("BU_:").parse(s)?;
     let (s, li) = opt(preceded(ms1, separated_list0(ms1, c_ident))).parse(s)?;
     let (s, _) = space0(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, Node(li.unwrap_or_default())))
 }
 
@@ -1431,7 +1460,7 @@ fn value_table(s: &str) -> IResult<&str, ValueTable> {
     let (s, value_table_name) = c_ident(s)?;
     let (s, value_descriptions) =
         many_till(preceded(ms0, value_description), preceded(ms0, semi_colon)).parse(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         ValueTable {
@@ -1467,7 +1496,7 @@ fn extended_multiplex(s: &str) -> IResult<&str, ExtendedMultiplex> {
     let (s, _) = ms1(s)?;
     let (s, mappings) = separated_list0(tag(","), extended_multiplex_mapping).parse(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         ExtendedMultiplex {
@@ -1510,7 +1539,7 @@ fn signal_extended_value_type_list(s: &str) -> IResult<&str, SignalExtendedValue
     let (s, _) = ms1(s)?;
     let (s, signal_extended_value_type) = signal_extended_value_type(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         SignalExtendedValueTypeList {
@@ -1547,7 +1576,7 @@ fn message_transmitter(s: &str) -> IResult<&str, MessageTransmitter> {
     let (s, _) = ms1(s)?;
     let (s, transmitter) = message_transmitters(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         MessageTransmitter {
@@ -1571,7 +1600,7 @@ fn signal_groups(s: &str) -> IResult<&str, SignalGroups> {
     let (s, _) = ms1(s)?;
     let (s, signal_names) = separated_list0(ms1, c_ident).parse(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         SignalGroups {
@@ -1587,6 +1616,7 @@ pub fn dbc(s: &str) -> IResult<&str, DBC> {
     let (
         s,
         (
+            _empty,
             version,
             new_symbols,
             bit_timing,
@@ -1608,6 +1638,7 @@ pub fn dbc(s: &str) -> IResult<&str, DBC> {
             extended_multiplex,
         ),
     ) = permutation((
+        empty_line,
         version,
         new_symbols,
         opt(bit_timing),
