@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 
-// #[test]
+#[test]
 fn main() -> io::Result<()> {
     // List of currently failing tests that should be fixed in the future
     let ignored_entries: HashSet<PathBuf> = [

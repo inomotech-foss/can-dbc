@@ -33,7 +33,7 @@ NS_ :
 BS_:
 
 BU_:
-VAL_TABLE_ Bar 6 "reserved" 5 "reserved" 4 "unused 2" 3 "unused" 2 "unused" 1 "#%=*ä'" 0 "With space" -5 "A negative value" ;
+VAL_TABLE_ Bar 6 "reserved" 5 "reserved" 4 "unused 2" 3 "unused" 2 "unused" 1 "#%=*Ã¤'" 0 "With space" -5 "A negative value" ;
 
 
 BO_ 0 Foo: 8 Vector__XXX
@@ -43,5 +43,5 @@ BO_ 0 Foo: 8 Vector__XXX
 
 BA_DEF_  "BusType" STRING ;
 BA_DEF_DEF_  "BusType" "";
-VAL_ 0 Foo 6 "reserved" 5 "reserved" 4 "unused 2" 3 "unused" 2 "unused" 1 "#%=*ä'" 0 "With space" -5 "A negative value" ;
+VAL_ 0 Foo 6 "reserved" 5 "reserved" 4 "unused 2" 3 "unused" 2 "unused" 1 "#%=*Ã¤'" 0 "With space" -5 "A negative value" ;
 
