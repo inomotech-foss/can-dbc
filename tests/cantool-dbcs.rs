@@ -6,6 +6,8 @@ use std::{
     path::PathBuf,
 };
 
+const MAX_REST_LEN: usize = 2048;
+
 #[test]
 fn main() -> io::Result<()> {
     // List of currently failing tests that should be fixed in the future
@@ -40,7 +42,17 @@ fn main() -> io::Result<()> {
         f.read_to_end(&mut buffer)?;
 
         if let Err(err) = can_dbc::DBC::from_slice(&buffer) {
-            panic!("Failed to parse DBC file {:?}: {:#?}", dbc_path, err);
+            match err {
+                can_dbc::Error::Incomplete(_, rest) => {
+                    let mut truncated_rest = rest.chars().take(MAX_REST_LEN).collect::<String>();
+                    if truncated_rest.len() < rest.len() {
+                        use std::fmt::Write;
+                        write!(&mut truncated_rest, "... (truncated from {} bytes)", rest.len()).unwrap();
+                    }
+                    panic!("Unable to parse full DBC file, remainder: {:?}", truncated_rest);
+                }
+                other => panic!("Failed to parse DBC file {:?}: {:#?}", dbc_path, other),
+            }
         }
     }
 
