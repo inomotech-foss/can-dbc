@@ -900,7 +900,7 @@ fn attribute_default(s: &str) -> IResult<&str, AttributeDefault> {
     let (s, _) = ms1(s)?;
     let (s, attribute_value) = attribute_value(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
 
     Ok((
         s,
@@ -909,6 +909,19 @@ fn attribute_default(s: &str) -> IResult<&str, AttributeDefault> {
             attribute_value,
         },
     ))
+}
+
+fn attribute_rel_default(s: &str) -> IResult<&str, ()> {
+    let (s, _) = multispace0(s)?;
+    let (s, _) = tag("BA_DEF_DEF_REL_").parse(s)?;
+    let (s, _) = ms1(s)?;
+    let (s, _name) = char_string(s)?;
+    let (s, _) = ms1(s)?;
+    let (s, _value) = attribute_value(s)?;
+    let (s, _) = semi_colon(s)?;
+    let (s, _) = eol(s)?;
+    // TODO: store name and value
+    Ok((s, ()))
 }
 
 fn node_comment(s: &str) -> IResult<&str, Comment> {
@@ -1345,6 +1358,17 @@ fn attribute_value_for_object(s: &str) -> IResult<&str, AttributeValueForObject>
     ))
 }
 
+fn attribute_rel_value_for_object(s: &str) -> IResult<&str, ()> {
+    let (s, _) = multispace0(s)?;
+    let (s, _) = tag("BA_REL_").parse(s)?;
+    let (s, _) = ms1(s)?;
+    // TODO: actually parse and handle this properly
+    let (s, _) = take_till(is_semi_colon).parse(s)?;
+    let (s, _) = semi_colon(s)?;
+    let (s, _) = eol(s)?;
+    Ok((s, ()))
+}
+
 // TODO add properties
 fn attribute_definition_node(s: &str) -> IResult<&str, AttributeDefinition> {
     let (s, _) = tag("BU_").parse(s)?;
@@ -1400,14 +1424,26 @@ fn attribute_definition(s: &str) -> IResult<&str, AttributeDefinition> {
     .parse(s)?;
 
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, def))
+}
+
+fn attribute_definition_rel(s: &str) -> IResult<&str, ()> {
+    let (s, _) = multispace0(s)?;
+    let (s, _) = tag("BA_DEF_REL_").parse(s)?;
+    let (s, _) = ms1(s)?;
+    let (s, _) = opt(alt((tag("BU_SG_REL_"), tag("BU_BO_REL_")))).parse(s)?;
+    // TODO: actually parse and handle this properly
+    let (s, _) = take_till(is_semi_colon).parse(s)?;
+    let (s, _) = semi_colon(s)?;
+    let (s, _) = eol(s)?;
+    Ok((s, ()))
 }
 
 fn symbol(s: &str) -> IResult<&str, Symbol> {
     let (s, _) = space1(s)?;
     let (s, symbol) = c_ident(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((s, Symbol(symbol)))
 }
 
@@ -1415,7 +1451,7 @@ fn new_symbols(s: &str) -> IResult<&str, Vec<Symbol>> {
     let (s, _) = multispace0(s)?;
     let (s, _) = tag("NS_ :").parse(s)?;
     let (s, _) = space0(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     let (s, symbols) = many0(symbol).parse(s)?;
     Ok((s, symbols))
 }
@@ -1442,7 +1478,7 @@ fn signal_type_ref(s: &str) -> IResult<&str, SignalTypeRef> {
     let (s, _) = ms1(s)?;
     let (s, signal_type_name) = c_ident(s)?;
     let (s, _) = semi_colon(s)?;
-    let (s, _) = line_ending(s)?;
+    let (s, _) = eol(s)?;
     Ok((
         s,
         SignalTypeRef {
@@ -1613,6 +1649,14 @@ fn signal_groups(s: &str) -> IResult<&str, SignalGroups> {
 }
 
 pub fn dbc(s: &str) -> IResult<&str, DBC> {
+    let attr_permutations = permutation((
+        many0(attribute_definition),
+        many0(attribute_definition_rel),
+        many0(attribute_default),
+        many0(attribute_rel_default),
+        many0(attribute_value_for_object),
+        many0(attribute_rel_value_for_object),
+    ));
     let (
         s,
         (
@@ -1628,9 +1672,14 @@ pub fn dbc(s: &str) -> IResult<&str, DBC> {
             environment_variable_data,
             signal_types,
             comments,
-            attribute_definitions,
-            attribute_defaults,
-            attribute_values,
+            (
+                attribute_definitions,
+                _attribute_definitions_rel,
+                attribute_defaults,
+                _attribute_rel_defaults,
+                attribute_values,
+                _attribute_rel_values,
+            ),
             value_descriptions,
             signal_type_refs,
             signal_groups,
@@ -1650,9 +1699,7 @@ pub fn dbc(s: &str) -> IResult<&str, DBC> {
         many0(environment_variable_data),
         many0(signal_type),
         many0(comment),
-        many0(attribute_definition),
-        many0(attribute_default),
-        many0(attribute_value_for_object),
+        attr_permutations,
         many0(value_descriptions),
         many0(signal_type_ref),
         many0(signal_groups),
